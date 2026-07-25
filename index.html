@@ -19,6 +19,13 @@
   html,body{height:100%;background:var(--paper);color:var(--ink);font-family:var(--font-body)}
   body{display:flex;flex-direction:column;overflow:hidden}
 
+  /* Dragging to pan, or double-clicking to zoom, otherwise smears a selection
+     across every place label it touches. Chrome is unselectable by default; the
+     panel's reading text opts back in below so quotes and refs stay copyable. */
+  body{-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  #panel h2,#panel .placeline,#panel .prose,#panel .altview,#panel .wright,
+  #panel .lettersline,#panel .refs,#legend .note{-webkit-user-select:text;user-select:text}
+
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;
     padding:0.55rem 1.1rem;background:#2a2a2a;color:#f7f5f0;flex:none;flex-wrap:wrap}
   .topbar .crumbs{font-family:var(--font-ui);font-size:0.82rem;display:flex;align-items:center;gap:0.5rem;white-space:nowrap}
