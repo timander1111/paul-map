@@ -17,6 +17,10 @@
     --sea:#c8d6d8; --paper:#f7f5f0; --ink:#2a2a2a;
   }
   html,body{height:100%;background:var(--paper);color:var(--ink);font-family:var(--font-body)}
+  /* Kills the browser's double-tap-to-zoom, which fired on stray taps and left
+     the page blown up at an arbitrary scale. Pinch-to-zoom is deliberately
+     left alone — that is someone's accessibility lifeline, not a misfire. */
+  html,body{touch-action:manipulation}
   body{display:flex;flex-direction:column;overflow:hidden}
 
   /* Dragging to pan, or double-clicking to zoom, otherwise smears a selection
@@ -159,7 +163,10 @@
      re-rasterising that smoothly is what costs the frames. Desktop keeps
      its smooth edges — it can afford them. */
   @media (hover:none){
-    #map.anim{shape-rendering:optimizeSpeed}
+    #map.busy{shape-rendering:optimizeSpeed}
+    /* a tap leaves :hover stuck on a province, so this filter would sit there
+       repainting long after the finger has gone */
+    .prov:hover{filter:none}
   }
   @media (prefers-reduced-motion:reduce){
     #halo.on{animation:none}
@@ -709,7 +716,7 @@ fadeMask("worldfade", 0, 0, W, H, 40);
    Routes, annotations and pins are appended to the svg afterwards, so they
    stay above it and never fade. */
 const gWorld = el("g", {id:"gworld", mask:"url(#worldfade)"}, svg);
-el("path", {d:GEO.land, fill:"#ece3cd", filter:"url(#coastglow)"}, gWorld);
+const landFill = el("path", {d:GEO.land, fill:"#ece3cd", filter:"url(#coastglow)"}, gWorld);
 
 /* Tints pulled ~18% toward the land colour so the province box reads as a wash
    over the map rather than a separate slab pasted on top of it. */
@@ -730,6 +737,36 @@ for (const p of GEO.provinces){
   fadeMask("provfade", pb.x, pb.y, pb.width, pb.height, 42);
   gProv.setAttribute("mask", "url(#provfade)"); }
 el("path", {d:GEO.land, id:"coast"}, gWorld);
+
+/* ---------------- decorative effects, suspended while moving ----------------
+   The two feather masks and the coast glow are the most expensive things on
+   the page by a wide margin: each forces the browser to render a layer into
+   an offscreen buffer, run a Gaussian blur or drop shadow over it, then
+   composite. That is cheap once, and ruinous at 60fps — changing the viewBox
+   invalidates every one of those buffers, so a drag re-blurs the whole map on
+   every frame. Phones simply cannot keep up.
+
+   They are all "at rest" refinements: a soft data edge, a little depth at the
+   coast. Nobody is studying the edge feathering mid-drag. So we strip them
+   during any movement and put them back the moment it stops. */
+const FX = [
+  [gWorld,    "mask",   "url(#worldfade)"],
+  [gProv,     "mask",   "url(#provfade)"],
+  [landFill,  "filter", "url(#coastglow)"],
+];
+let fxSuspended = false, dragBusy = false, animBusy = false, wheelTimer = null;
+function updateFX(){
+  const off = dragBusy || animBusy || wheelTimer !== null;
+  if (off === fxSuspended) return;
+  fxSuspended = off;
+  for (const [n, a, v] of FX) off ? n.removeAttribute(a) : n.setAttribute(a, v);
+  svg.classList.toggle("busy", off);
+}
+function nudgeWheelIdle(){
+  clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => { wheelTimer = null; updateFX(); }, 180);
+  updateFX();
+}
 
 const gProvLbl = el("g", {id:"gprovlbl", "pointer-events":"none"}, gWorld);
 const provLblNodes = [];
@@ -896,6 +933,7 @@ function animateTo(target, ms){
   if (REDUCED.matches){ vb = {...target}; applyVB(); return; }
   const from = {...vb}, t0 = performance.now();
   svg.classList.add("anim");
+  animBusy = true; updateFX();
   (function step(t){
     const k = Math.min(1, (t - t0) / ms);
     const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2)/2;
@@ -903,7 +941,7 @@ function animateTo(target, ms){
     vb.w = from.w + (target.w-from.w)*e;  vb.h = from.h + (target.h-from.h)*e;
     applyVB();
     if (k < 1) animRAF = requestAnimationFrame(step);
-    else svg.classList.remove("anim");
+    else { svg.classList.remove("anim"); animBusy = false; updateFX(); }
   })(t0);
 }
 function zoomAt(cx, cy, f, ms){
@@ -927,6 +965,7 @@ function ensureVisible(p){
 svg.addEventListener("wheel", ev => {
   ev.preventDefault();
   cancelAnimationFrame(animRAF);
+  animBusy = false; nudgeWheelIdle();
   const [mx,my] = svgPoint(ev.clientX, ev.clientY);
   let d = ev.deltaY;
   if (ev.deltaMode === 1) d *= 16; else if (ev.deltaMode === 2) d *= 400;
@@ -942,6 +981,7 @@ svg.addEventListener("pointerdown", ev => {
   svg.setPointerCapture(ev.pointerId);
   ptrs.set(ev.pointerId, {x:ev.clientX, y:ev.clientY});
   cancelAnimationFrame(animRAF);
+  animBusy = false; dragBusy = true; updateFX();
   if (ptrs.size === 2){
     drag = null;
     svg.classList.remove("dragging");
@@ -980,7 +1020,11 @@ function endPtr(ev){
   ptrs.delete(ev.pointerId);
   try { svg.releasePointerCapture(ev.pointerId); } catch(e){}
   if (ptrs.size < 2) pinch = null;
-  if (ptrs.size === 0){ drag = null; svg.classList.remove("dragging"); }
+  if (ptrs.size === 0){
+    drag = null;
+    svg.classList.remove("dragging");
+    dragBusy = false; updateFX();          // feathering and glow come back
+  }
 }
 svg.addEventListener("pointerup", endPtr);
 svg.addEventListener("pointercancel", endPtr);
